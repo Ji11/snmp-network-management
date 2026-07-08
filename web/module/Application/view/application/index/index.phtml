@@ -1,0 +1,207 @@
+<?php
+/**
+ * @var Laminas\View\Renderer\PhpRenderer $this
+ */
+?>
+<div class="container">
+    <div class="panel-topo"><div id="topology"></div></div>
+    <div class="panel-datagrid"><table id="dg-devices"></table></div>
+    <div class="panel-charts">
+        <div class="chart-box"><div id="chart-line"></div></div>
+        <div class="chart-box"><div id="chart-pie"></div></div>
+    </div>
+</div>
+<?php $this->inlineScript()->captureStart(); ?>
+// ============================================================================
+// Vis.js 网络拓扑 — 60s ICMP 监测
+// ============================================================================
+var nodesDS = new vis.DataSet([]);
+var edgesDS = new vis.DataSet([]);
+
+var topologyEl = document.getElementById('topology');
+var network = new vis.Network(topologyEl, {nodes: nodesDS, edges: edgesDS}, {
+    edges: {
+        smooth: {type: 'continuous'},
+        arrows: {to: {enabled: false}}
+    },
+    groups: {
+        router:  {color: {background: '#e67e22', border: '#d35400'}, shape: 'box'},
+        switch:  {color: {background: '#3498db', border: '#2980b9'}, shape: 'box'},
+        pc:      {color: {background: '#2ecc71', border: '#27ae60'}, shape: 'ellipse'},
+        cloud:   {color: {background: '#95a5a6', border: '#7f8c8d'}, shape: 'triangle'},
+        server:  {color: {background: '#9b59b6', border: '#8e44ad'}, shape: 'diamond'}
+    },
+    physics: false,
+    layout: {randomSeed: 0},
+    interaction: {
+        dragNodes: false,
+        dragView: false,
+        zoomView: false
+    }
+});
+
+var positions = {
+    'InterNet1': {x: 100, y: -200},
+    'R1':        {x: 0,   y: -100},
+    'C1':        {x: -200, y: 50},
+    'C2':        {x: 200,  y: 50},
+    'D1':        {x: -300, y: 200},
+    'D2':        {x: 300,  y: 200},
+    'Cloud1':    {x: 450,  y: 150},
+    'VM':        {x: 550,  y: 50},
+    'PC-A':      {x: -350, y: 300},
+    'PC-B':      {x: -200, y: 300},
+    'PC-C':      {x: 250,  y: 300},
+    'PC-D':      {x: 400,  y: 300}
+};
+
+function refreshTopology() {
+    $.getJSON('/api/topology', function(data) {
+        if (nodesDS.length === 0) {
+            data.nodes.forEach(function(n) {
+                n.x = positions[n.id] ? positions[n.id].x : 0;
+                n.y = positions[n.id] ? positions[n.id].y : 0;
+                n.fixed = true;
+            });
+            nodesDS.add(data.nodes);
+            edgesDS.add(data.edges);
+            network.fit({animation: false});
+        } else {
+            data.nodes.forEach(function(n) {
+                nodesDS.update({id: n.id, color: n.color});
+            });
+        }
+    });
+}
+
+refreshTopology();
+setInterval(refreshTopology, 60000);
+
+// ============================================================================
+// EasyUI DataGrid — 设备数据列表
+// ============================================================================
+$('#dg-devices').datagrid({
+    url: '/api/devices',
+    method: 'get',
+    fitColumns: true,
+    singleSelect: true,
+    pagination: false,
+    columns: [[
+        {field: 'name', title: '设备', width: 15},
+        {field: 'sysName', title: '系统名称', width: 15},
+        {field: 'metric_cnt', title: '指标数', width: 10},
+        {field: 'last_update', title: '最近更新', width: 30},
+        {field: 'action', title: '详情', width: 15, formatter: function(v, row) {
+            return '<a href="javascript:void(0)" onclick="showDeviceDetail(\'' + row.name + '\')">查看</a>';
+        }}
+    ]],
+    loadFilter: function(data) {
+        var rows = [];
+        if (data.devices) {
+            Object.keys(data.devices).forEach(function(k) {
+                var metrics = data.devices[k];
+                var sysName = '—';
+                var lastTs = '—';
+                if (metrics.length > 0) {
+                    metrics.forEach(function(m) {
+                        if (m.metric === 'sysName') sysName = m.value;
+                    });
+                    var last = metrics.reduce(function(a, b) {
+                        return a.created_at > b.created_at ? a : b;
+                    });
+                    lastTs = last.created_at;
+                }
+                rows.push({name: k, sysName: sysName, metric_cnt: metrics.length, last_update: lastTs});
+            });
+        }
+        return {total: rows.length, rows: rows};
+    }
+});
+
+function showDeviceDetail(name) {
+    $.getJSON('/api/device/' + encodeURIComponent(name), function(data) {
+        if (data.metrics && data.metrics.length > 0) {
+            var html = '<table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">';
+            html += '<tr style="background:#f5f5f5"><th>Metric</th><th>OID</th><th>Value</th><th>Time</th></tr>';
+            data.metrics.forEach(function(m) {
+                html += '<tr><td>' + m.metric + '</td><td>' + m.oid + '</td><td>' + m.value + '</td><td>' + m.created_at + '</td></tr>';
+            });
+            html += '</table>';
+            $('#dlg-detail').html(html).dialog({title: name + ' 详情', width: 750, height: 450, closed: false});
+        }
+    });
+}
+$('body').append('<div id="dlg-detail"></div>');
+
+// ============================================================================
+// ECharts — ifInOctets 折线图 + 内存饼图
+// ============================================================================
+var lineChart = echarts.init(document.getElementById('chart-line'));
+var pieChart  = echarts.init(document.getElementById('chart-pie'));
+
+function refreshCharts() {
+    // ifInOctets line chart
+    $.getJSON('/api/metrics/ifInOctets', function(data) {
+        var seriesMap = {};
+        data.data.forEach(function(row) {
+            var key = row.device + '.' + row.metric.replace('ifInOctets.', '');
+            if (!seriesMap[key]) seriesMap[key] = [];
+            seriesMap[key].push({time: row.created_at, value: parseFloat(row.value) || 0});
+        });
+        var series = [];
+        var allTimes = [];
+        Object.keys(seriesMap).forEach(function(k) {
+            var points = seriesMap[k].sort(function(a, b) { return a.time.localeCompare(b.time); });
+            var values = points.map(function(p) { return p.value; });
+            var hasData = values.some(function(v) { return v > 0; });
+            if (hasData) {
+                if (allTimes.length === 0) {
+                    allTimes = points.map(function(p) { return p.time.replace('T', ' ').substring(0, 19); });
+                }
+                series.push({name: k, type: 'line', data: values});
+            }
+        });
+        lineChart.setOption({
+            title: {text: 'ifInOctets 流量', left: 'center', textStyle: {fontSize: 14}},
+            tooltip: {trigger: 'axis'},
+            legend: {bottom: 0, type: 'scroll'},
+            grid: {left: 50, right: 20, top: 40, bottom: 40},
+            xAxis: {type: 'category', data: allTimes, axisLabel: {rotate: 45, fontSize: 10}},
+            yAxis: {type: 'value', name: 'Octets'},
+            series: series
+        });
+    });
+
+    // Memory pie chart
+    $.getJSON('/api/metrics/memTotalReal', function(dataTotal) {
+        $.getJSON('/api/metrics/memAvailReal', function(dataAvail) {
+            var total = 0, avail = 0;
+            if (dataTotal.data && dataTotal.data.length > 0) total = parseFloat(dataTotal.data[0].value) || 0;
+            if (dataAvail.data && dataAvail.data.length > 0) avail = parseFloat(dataAvail.data[0].value) || 0;
+            var used = total - avail;
+            if (used < 0) used = 0;
+            pieChart.setOption({
+                title: {text: 'VM 物理内存', left: 'center', textStyle: {fontSize: 14}},
+                tooltip: {trigger: 'item', formatter: '{b}: {c} KB ({d}%)'},
+                legend: {bottom: 0},
+                series: [{
+                    type: 'pie', radius: '70%',
+                    data: [
+                        {name: '已用', value: used},
+                        {name: '可用', value: avail}
+                    ],
+                    label: {formatter: '{b}\n{d}%'}
+                }]
+            });
+        });
+    });
+}
+
+refreshCharts();
+setInterval(refreshCharts, 60000);
+
+window.addEventListener('resize', function() {
+    lineChart.resize();
+    pieChart.resize();
+});
+<?php $this->inlineScript()->captureEnd(); ?>

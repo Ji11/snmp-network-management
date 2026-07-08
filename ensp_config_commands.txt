@@ -1,0 +1,576 @@
+###############################################################################
+## 一、eNSP 设备选型与端口互联表
+###############################################################################
+#
+#  设备       型号       作用
+#  ─────────────────────────────────────────
+#  R1         AR2220     出口路由器 (OSPF)
+#  C1         CE12800    核心交换机 (OSPF, Eth-Trunk L3)
+#  C2         CE12800    核心交换机 (OSPF, Eth-Trunk L3)
+#  D1         S3700      左侧汇聚 (静态路由)
+#  D2         S3700      右侧汇聚 (静态路由)
+#  InterNet1  PC         互联网终端
+#  Cloud1     Cloud      eNSP 云设备 (桥接真实 VM, 192.168.179.0/24)
+#  PC-A/B/C/D PC         终端计算机
+#
+#  ─── 物理端口互联表 (CE12800 接口格式: GE1/0/x) ───
+#  R1   GE0/0/0  ←→  InterNet1  Ethernet0/0/0   [10.1.1.24/30]
+#  R1   GE0/0/1  ←→  C1         GE1/0/1          [10.1.1.12/30, OSPF Area 0]
+#  R1   GE0/0/2  ←→  C2         GE1/0/1          [10.1.1.16/30, OSPF Area 0]
+#  C1   GE1/0/2  ←→  C2         GE1/0/2          [Eth-Trunk 1 成员]
+#  C1   GE1/0/3  ←→  C2         GE1/0/3          [Eth-Trunk 1 成员]
+#  C1   GE1/0/4  ←→  D1         GE0/0/1          [10.1.1.4/30]
+#  C2   GE1/0/4  ←→  D2         GE0/0/1          [10.1.1.8/30]
+#  C2   GE1/0/5  ←→  Cloud1     内部口1          [192.168.179.0/24]
+#  Cloud1        外部口2绑定 → 真实VMnet网卡         [桥接到 VM 192.168.179.136]
+#  D1   GE0/0/2  ←→  PC-A       Ethernet0/0/0   [192.168.2.0/24]
+#  D1   GE0/0/3  ←→  PC-B       Ethernet0/0/0   [192.168.3.0/24]
+#  D2   GE0/0/2  ←→  PC-C       Ethernet0/0/0   [192.168.4.0/24]
+#  D2   GE0/0/3  ←→  PC-D       Ethernet0/0/0   [192.168.5.0/24]
+#
+
+###############################################################################
+## 二、IP 地址规划总表
+###############################################################################
+
+#  网段             用途                        设备IP
+#  ──────────────────────────────────────────────────────────────────────
+#  10.1.1.24/30     R1↔InterNet1                R1:10.1.1.25    InterNet1:10.1.1.26
+#  10.1.1.12/30     R1↔C1 (OSPF Area 0)        R1:10.1.1.13    C1:10.1.1.14
+#  10.1.1.16/30     R1↔C2 (OSPF Area 0)        R1:10.1.1.17    C2:10.1.1.18
+#  10.1.1.0/30      C1↔C2 Eth-Trunk (OSPF)     C1:10.1.1.1     C2:10.1.1.2
+#  10.1.1.4/30      C1↔D1 上联                  C1:10.1.1.5     D1:10.1.1.6
+#  10.1.1.8/30      C2↔D2 上联                  C2:10.1.1.9     D2:10.1.1.10
+#                    (注: C2=10.1.1.9/D2=10.1.1.10, 原文 10.1.1.6/7)
+#  192.168.179.0/24 C2↔Cloud1 (桥接VM)          C2:192.168.179.1  VM:192.168.179.136
+#  192.168.2.0/24   D1↔PC-A                     D1:192.168.2.1  PC-A:192.168.2.2
+#  192.168.3.0/24   D1↔PC-B                     D1:192.168.3.1  PC-B:192.168.3.2
+#  192.168.4.0/24   D2↔PC-C                     D2:192.168.4.1  PC-C:192.168.4.2
+#  192.168.5.0/24   D2↔PC-D                     D2:192.168.5.1  PC-D:192.168.5.2
+
+###############################################################################
+## 三、VLAN 规划
+###############################################################################
+
+#  VLAN ID  用途                   所属设备
+#  ───────────────────────────────────────────
+#  VLAN 200  R1↔C1 点对点互联       C1
+#  VLAN 201  R1↔C2 点对点互联       C2
+#  VLAN 101  C1↔D1 点对点互联       C1 / D1
+#  VLAN 102  C2↔D2 点对点互联       C2 / D2
+#  VLAN 10   C2↔Cloud1 桥接VM 业务  C2
+#  VLAN 20   D1↔PC-A 业务           D1
+#  VLAN 30   D1↔PC-B 业务           D1
+#  VLAN 40   D2↔PC-C 业务           D2
+#  VLAN 50   D2↔PC-D 业务           D2
+
+###############################################################################
+## 四、路由设计
+###############################################################################
+
+#  OSPF Area 0:
+#    Area 0 仅包含 R1↔C1 (10.1.1.12/30)、R1↔C2 (10.1.1.16/30)
+#
+#  路由传播 (C1/C2 间路由经 R1 中转):
+#    R1 import-route direct (10.1.1.24/30 Internet 侧) → AS External
+#    C1 静态路由 (192.168.2/3.0/24) → import-route static → AS External
+#    C2 静态路由 (192.168.4/5.0/24) → import-route static → AS External
+#    C2 直连 192.168.179.0/24 → import-route direct → AS External
+#    D1/D2 默认路由 → 上联核心
+
+
+###############################################################################
+###############################################################################
+## 五、逐设备配置命令
+###############################################################################
+###############################################################################
+
+# ===========================================================================
+#  5.1 R1 (AR2220)
+#  接口:
+#    GE0/0/0: 10.1.1.25/30 → InterNet1
+#    GE0/0/1: 10.1.1.13/30 → C1 (OSPF Area 0)
+#    GE0/0/2: 10.1.1.17/30 → C2 (OSPF Area 0)
+# ===========================================================================
+
+<Huawei> system-view
+sysname R1
+
+# ---- 接口配置 ----
+interface GigabitEthernet0/0/0
+ ip address 10.1.1.25 255.255.255.252
+
+interface GigabitEthernet0/0/1
+ ip address 10.1.1.13 255.255.255.252
+
+interface GigabitEthernet0/0/2
+ ip address 10.1.1.17 255.255.255.252
+
+# ---- ACL + Route-Policy (控制重分布范围) ----
+acl 2000
+ rule 5 permit source 10.1.1.24 0.0.0.3
+ quit
+route-policy Internet permit node 10
+ if-match acl 2000
+ quit
+
+# ---- OSPF Area 0 ----
+# Internet 侧 (10.1.1.24/30) 通过 import-route direct 注入为 AS External
+ospf 1 router-id 3.3.3.3
+ area 0.0.0.0
+  network 10.1.1.12 0.0.0.3               # R1↔C1 链路
+  network 10.1.1.16 0.0.0.3               # R1↔C2 链路
+ import-route direct route-policy Internet  # 仅注入 10.1.1.24/30
+
+save
+y
+
+
+# ===========================================================================
+#  5.2 C2 (CE12800)
+#  接口:
+#    GE1/0/1 (VLAN 201) → R1:        10.1.1.18/30  (OSPF Area 0)
+#    GE1/0/2, GE1/0/3 → C1:         Eth-Trunk1 L3, 10.1.1.2/30  (OSPF Area 0)
+#    GE1/0/4 (VLAN 102) → D2:        10.1.1.9/30   (静态路由)
+#    GE1/0/5 (VLAN 10)  → Cloud1:   192.168.179.1/24 (OSPF, 桥接到VM)
+# ===========================================================================
+
+system-view immediately
+sysname C2
+
+vlan batch 10 102 201
+
+interface Eth-Trunk1
+ undo portswitch
+ ip address 10.1.1.2 255.255.255.252
+ quit
+
+
+interface GE1/0/1
+ undo shutdown
+ port link-type access
+ port default vlan 201
+ quit
+
+interface GE1/0/2
+ undo shutdown
+ eth-trunk 1
+ quit
+
+interface GE1/0/3
+ undo shutdown
+ eth-trunk 1
+ quit
+
+interface GE1/0/4
+ undo shutdown
+ port link-type access
+ port default vlan 102
+ quit
+
+interface GE1/0/5
+ undo shutdown
+ port link-type access
+ port default vlan 10
+ quit
+
+# ---- VLANIF ----
+
+interface Vlanif201
+ ip address 10.1.1.18 255.255.255.252
+ quit
+
+interface Vlanif102
+ ip address 10.1.1.9 255.255.255.252
+ quit
+
+interface Vlanif10
+ ip address 192.168.179.1 255.255.255.0
+ quit
+
+# ---- 静态路由 ----
+ip route-static 192.168.4.0 255.255.255.0 10.1.1.10
+ip route-static 192.168.5.0 255.255.255.0 10.1.1.10
+
+# ---- ACL + Route-Policy (控制 import-route direct 范围) ----
+acl 2000
+ rule 5 permit source 192.168.179.0 0.0.0.255
+ quit
+route-policy CloudNet permit node 10
+ if-match acl 2000
+ quit
+
+# ---- OSPF Area 0 ----
+# Area 0 对C2来说 仅含 C2↔R1 (10.1.1.16/30) 一条链路
+# Cloud 网段 + D2 下联网段通过 import-route 注入为 AS External
+ospf 1 router-id 2.2.2.2
+ silent-interface Vlanif102
+ area 0.0.0.0
+  network 10.1.1.16 0.0.0.3
+ import-route static
+ import-route direct route-policy CloudNet
+
+save
+y
+
+
+# ===========================================================================
+#  5.3 C1 (CE12800)
+#  接口:
+#    GE1/0/1 (VLAN 200) → R1:        10.1.1.14/30  (OSPF Area 0)
+#    GE1/0/2, GE1/0/3 → C2:         Eth-Trunk1 L3, 10.1.1.1/30  (OSPF Area 0)
+#    GE1/0/4 (VLAN 101) → D1:        10.1.1.5/30   (静态路由)
+# ===========================================================================
+
+system-view immediately
+sysname C1
+
+vlan batch 101 200
+
+interface Eth-Trunk1
+ undo portswitch
+ ip address 10.1.1.1 255.255.255.252
+ quit
+
+# ---- 物理端口 (CE12800 默认 shutdown, 必须 undo shutdown) ----
+
+interface GE1/0/1
+ undo shutdown
+ port link-type access
+ port default vlan 200
+ quit
+
+interface GE1/0/2
+ undo shutdown
+ eth-trunk 1
+ quit
+
+interface GE1/0/3
+ undo shutdown
+ eth-trunk 1
+ quit
+
+interface GE1/0/4
+ undo shutdown
+ port link-type access
+ port default vlan 101
+ quit
+
+# ---- VLANIF ----
+
+interface Vlanif200
+ ip address 10.1.1.14 255.255.255.252
+ quit
+
+interface Vlanif101
+ ip address 10.1.1.5 255.255.255.252
+ quit
+
+# ---- 静态路由 ----
+ip route-static 192.168.2.0 255.255.255.0 10.1.1.6
+ip route-static 192.168.3.0 255.255.255.0 10.1.1.6
+
+# ---- OSPF Area 0 ----
+# Area 0 仅含 R1↔C1 (10.1.1.12/30) 一条链路
+ospf 1 router-id 1.1.1.1
+ silent-interface Vlanif101
+ area 0.0.0.0
+  network 10.1.1.12 0.0.0.3
+ import-route static
+
+save
+y
+
+
+# ===========================================================================
+#  5.4 D1 (S3700)
+#  接口:
+#    GE0/0/1 (VLAN 101) → C1:   10.1.1.6/30
+#    GE0/0/2 (VLAN 20)  → PC-A: 192.168.2.1/24
+#    GE0/0/3 (VLAN 30)  → PC-B: 192.168.3.1/24
+# ===========================================================================
+
+<Huawei> system-view
+sysname D1
+
+vlan batch 20 30 101
+
+interface GigabitEthernet0/0/1
+ port link-type access
+ port default vlan 101
+
+interface GigabitEthernet0/0/2
+ port link-type access
+ port default vlan 20
+
+interface GigabitEthernet0/0/3
+ port link-type access
+ port default vlan 30
+
+interface Vlanif 101
+ ip address 10.1.1.6 255.255.255.252
+
+interface Vlanif 20
+ ip address 192.168.2.1 255.255.255.0
+
+interface Vlanif 30
+ ip address 192.168.3.1 255.255.255.0
+
+ip route-static 0.0.0.0 0.0.0.0 10.1.1.5
+
+save
+y
+
+
+# ===========================================================================
+#  5.5 D2 (S3700) 
+#  接口:
+#    GE0/0/1 (VLAN 102) → C2:   10.1.1.10/30
+#    GE0/0/2 (VLAN 40)  → PC-C: 192.168.4.1/24
+#    GE0/0/3 (VLAN 50)  → PC-D: 192.168.5.1/24
+# ===========================================================================
+
+<Huawei> system-view
+sysname D2
+
+vlan batch 40 50 102
+
+interface GigabitEthernet0/0/1
+ port link-type access
+ port default vlan 102
+
+interface GigabitEthernet0/0/2
+ port link-type access
+ port default vlan 40
+
+interface GigabitEthernet0/0/3
+ port link-type access
+ port default vlan 50
+
+interface Vlanif 102
+ ip address 10.1.1.10 255.255.255.252
+
+interface Vlanif 40
+ ip address 192.168.4.1 255.255.255.0
+
+interface Vlanif 50
+ ip address 192.168.5.1 255.255.255.0
+
+ip route-static 0.0.0.0 0.0.0.0 10.1.1.9
+
+save
+y
+
+
+###############################################################################
+## 六、终端设备配置
+###############################################################################
+
+# ---- 6.1 InterNet1 (PC) ----
+#  IP: 10.1.1.26/30  Gateway: 10.1.1.25
+
+# ---- 6.2 PC-A ----
+#  IP: 192.168.2.2/24  Gateway: 192.168.2.1
+
+# ---- 6.3 PC-B ----
+#  IP: 192.168.3.2/24  Gateway: 192.168.3.1
+
+# ---- 6.4 PC-C ----
+#  IP: 192.168.4.2/24  Gateway: 192.168.4.1
+
+# ---- 6.5 PC-D ----
+#  IP: 192.168.5.2/24  Gateway: 192.168.5.1
+
+# ---- 6.6 Cloud1 — 桥接真实 VM ----
+#  IP 配在两端:
+#    - C2 VLANIF 10: 192.168.179.1/24 (eNSP 侧网关)
+#    - 真实 VM 网卡:  192.168.179.136
+
+###############################################################################
+## 七、验证命令
+###############################################################################
+
+# --- 7.1 直连检查 ---
+# R1:
+ping 10.1.1.26          # InterNet1
+ping 10.1.1.14          # C1
+ping 10.1.1.18          # C2
+
+# C1:
+ping 10.1.1.13          # R1
+ping 10.1.1.2           # C2 Eth-Trunk
+ping 10.1.1.6           # D1
+
+# C2:
+ping 10.1.1.17          # R1
+ping 10.1.1.1           # C1 Eth-Trunk
+ping 10.1.1.10          # D2
+ping 192.168.179.136    # VM (via Cloud1)
+
+# D1:
+ping 10.1.1.5           # C1
+ping 192.168.2.2        # PC-A
+ping 192.168.3.2        # PC-B
+
+# D2:
+ping 10.1.1.9           # C2
+ping 192.168.4.2        # PC-C
+ping 192.168.5.2        # PC-D
+
+# --- 7.2 Eth-Trunk 检查 ---
+# C1 / C2:
+display eth-trunk 1
+# 预期: 两个成员口 Up
+
+# --- 7.3 OSPF 邻居检查 ----
+# R1:
+display ospf peer brief
+# 预期: 与 C1 (1.1.1.1) 和 C2 (2.2.2.2) 均为 FULL
+
+# C1:
+display ospf peer brief
+# 预期: 仅与 R1 (3.3.3.3) 为 FULL (C2 不在 Area 0, 无直接邻接)
+
+# C2:
+display ospf peer brief
+# 预期: 仅与 R1 (3.3.3.3) 为 FULL (C1 不在 Area 0, 无直接邻接)
+
+# --- 7.4 OSPF 路由表检查 ---
+# R1:
+display ospf routing
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30 (无 10.1.1.0/30, Eth-Trunk 不在 Area 0)
+# AS External: 192.168.2/3.0/24 (C1 import), 192.168.4/5.0/24 (C2 import)
+#              192.168.179.0/24 (C2 import)
+
+# C1:
+display ospf routing
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30
+# AS External: 10.1.1.24/30 (R1 import), 192.168.4/5.0/24 (C2 import)
+#              192.168.179.0/24 (C2 import)
+
+# C2:
+display ospf routing
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30
+# AS External: 10.1.1.24/30 (R1 import), 192.168.2/3.0/24 (C1 import)
+
+# --- 7.5 全局路由表检查 ---
+# R1:
+display ip routing-table
+# 应有到所有 192.168.x.0/24 的 OSPF 路由
+
+# C1 / C2:
+display ip routing-table
+# 应有到所有网段的 OSPF + 静态 + 直连路由
+
+# --- 7.6 全网端到端 ping 测试 ---
+# InterNet1 (10.1.1.26):
+ping 192.168.179.136    # VM (via Cloud1)
+ping 192.168.2.2        # PC-A
+ping 192.168.3.2        # PC-B
+ping 192.168.4.2        # PC-C
+ping 192.168.5.2        # PC-D
+
+# PC-A (192.168.2.2):
+ping 10.1.1.26          # InterNet1
+ping 192.168.4.2        # PC-C (跨汇聚)
+
+# PC-B (192.168.3.2):
+ping 10.1.1.26          # InterNet1
+ping 192.168.5.2        # PC-D (跨汇聚)
+
+# VM (192.168.179.136, 经 Cloud1 桥接):
+ping 10.1.1.26          # InterNet1
+ping 192.168.2.2        # PC-A
+
+# --- 7.7 链路聚合冗余测试 ---
+# C1 上 shutdown 一个 Eth-Trunk 成员口:
+interface GE1/0/2
+ shutdown
+# C1 上检查 OSPF 邻居与 C2 仍保持 FULL
+display ospf peer brief
+# 恢复:
+interface GE1/0/2
+ undo shutdown
+
+# --- 7.8 核心链路冗余测试 ---
+# R1 同时有两条路径到 C1/C2, shutdown 一条:
+interface GigabitEthernet0/0/1
+ shutdown
+# 从 R1 ping 192.168.4.2 (应仍通, 走 R1→C2→D2)
+ping 192.168.4.2
+# 从 R1 ping 192.168.2.2 (应仍通, 走 R1→C2→C1→D1, OSPF 自动收敛)
+ping 192.168.2.2
+# 恢复:
+interface GigabitEthernet0/0/1
+ undo shutdown
+
+
+###############################################################################
+## 八、SNMP Agent 配置 (所有设备)
+###############################################################################
+
+# ===========================================================================
+#  8.1 R1 (AR2220) — 出口路由器
+# ===========================================================================
+
+system-view
+snmp-agent
+snmp-agent community read bjfu11mx
+snmp-agent sys-info version v2c
+save
+y
+
+# ===========================================================================
+#  8.2 C1 (CE12800) — 核心交换机
+# ===========================================================================
+
+system-view immediately
+snmp-agent
+snmp-agent community read bjfu11mx
+snmp-agent sys-info version v2c
+save
+y
+
+# ===========================================================================
+#  8.3 C2 (CE12800) — 核心交换机
+# ===========================================================================
+
+system-view immediately
+snmp-agent
+snmp-agent community read bjfu11mx
+snmp-agent sys-info version v2c
+save
+y
+
+# ===========================================================================
+#  8.4 D1 (S3700) — 左侧汇聚交换机
+# ===========================================================================
+
+system-view
+snmp-agent
+snmp-agent community read bjfu11mx
+snmp-agent sys-info version v2c
+save
+y
+
+# ===========================================================================
+#  8.5 D2 (S3700) — 右侧汇聚交换机
+# ===========================================================================
+
+system-view
+snmp-agent
+snmp-agent community read bjfu11mx
+snmp-agent sys-info version v2c
+save
+y
+
+
+###############################################################################
+## 九、SNMP 验证命令 (在 Ubuntu VM 上执行)
+###############################################################################
+
+# snmpwalk -v2c -c bjfu11mx 10.1.1.25 system    # R1
+# snmpwalk -v2c -c bjfu11mx 10.1.1.14 system    # C1
+# snmpwalk -v2c -c bjfu11mx 10.1.1.18 system    # C2
+# snmpwalk -v2c -c bjfu11mx 10.1.1.6  system    # D1
+# snmpwalk -v2c -c bjfu11mx 10.1.1.10 system    # D2

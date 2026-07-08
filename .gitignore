@@ -1,0 +1,8 @@
+build/
+web/vendor/
+*.pid
+*.pdf
+*.png
+*.jpg
+*.md
+.claude/
