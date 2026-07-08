@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int get_string_setting(const config_setting_t *setting, const char *name, char *buffer, size_t size) {
+// 从 libconfig setting 中读取字符串，写入 buffer
+int get_string_setting(const config_setting_t *setting, const char *name, char *buffer, size_t size) {
     const char *value = NULL;
+    // config_setting_lookup_string(): 按 key 查找字符串值（libconfig API）
     if (!config_setting_lookup_string(setting, name, &value) || value == NULL) {
         return -1;
     }
@@ -15,11 +17,14 @@ static int get_string_setting(const config_setting_t *setting, const char *name,
         return -1;
     }
 
+    // memcpy(): 内存复制，比 strcpy 更安全（已知长度时不需要搜索 \0）
     memcpy(buffer, value, strlen(value) + 1);
     return 0;
 }
 
-static int load_device_metrics(config_setting_t *device_entry, target_config_t *target) {
+// 解析一个设备下的所有 metric 条目
+int load_device_metrics(config_setting_t *device_entry, target_config_t *target) {
+    // config_setting_get_member(): 获取 setting 的指定子成员
     config_setting_t *metrics = config_setting_get_member(device_entry, "metrics");
     if (metrics == NULL || !config_setting_is_list(metrics)) {
         fprintf(stderr, "config error: device '%s' metrics must be a list\n", target->name);
@@ -35,6 +40,7 @@ static int load_device_metrics(config_setting_t *device_entry, target_config_t *
 
     target->metric_count = count;
     for (int i = 0; i < count; ++i) {
+        // config_setting_get_elem(): 获取 list 中第 i 个元素
         config_setting_t *item = config_setting_get_elem(metrics, i);
         metric_config_t *metric = &target->metrics[i];
 
@@ -44,8 +50,10 @@ static int load_device_metrics(config_setting_t *device_entry, target_config_t *
             return -1;
         }
 
+        // memset(): 将指定内存区域全部置为 0
         memset(metric->oid, 0, sizeof(metric->oid));
         metric->oid_len = MAX_OID_LEN;
+        // snmp_parse_oid(): 将 "1.3.6.1..." 字符串解析为 Net-SNMP oid 数组
         if (!snmp_parse_oid(metric->oid_text, metric->oid, &metric->oid_len)) {
             snmp_perror(metric->oid_text);
             return -1;
@@ -55,7 +63,9 @@ static int load_device_metrics(config_setting_t *device_entry, target_config_t *
     return 0;
 }
 
-static int load_devices(config_t *cfg, collector_config_t *config) {
+// 解析 [devices] 数组
+int load_devices(config_t *cfg, collector_config_t *config) {
+    // config_lookup(): 按路径查找配置节（libconfig API）
     config_setting_t *devices = config_lookup(cfg, "devices");
     if (devices == NULL || !config_setting_is_list(devices)) {
         fprintf(stderr, "config error: devices must be a list\n");
@@ -81,8 +91,10 @@ static int load_devices(config_t *cfg, collector_config_t *config) {
             return -1;
         }
 
+        // 可选字段：retries 和 timeout_ms，不写则用默认值
         target->retries = 1;
         target->timeout_ms = 1000;
+        // config_setting_lookup_int(): 按 key 查找 int 值
         config_setting_lookup_int(item, "retries", &target->retries);
         config_setting_lookup_int(item, "timeout_ms", &target->timeout_ms);
 
@@ -94,6 +106,7 @@ static int load_devices(config_t *cfg, collector_config_t *config) {
     return 0;
 }
 
+// 加载完整配置文件，填充 collector_config_t 结构体
 int load_collector_config(const char *path, collector_config_t *config) {
     config_t cfg;
 
@@ -105,7 +118,9 @@ int load_collector_config(const char *path, collector_config_t *config) {
     strcpy(config->mode, "sync");
     config->poll_interval_sec = 5;
 
+    // config_init(): 初始化 libconfig 配置对象
     config_init(&cfg);
+    // config_read_file(): 从文件解析配置
     if (!config_read_file(&cfg, path)) {
         fprintf(stderr, "config read error: %s:%d - %s\n",
                 config_error_file(&cfg), config_error_line(&cfg), config_error_text(&cfg));
@@ -113,6 +128,7 @@ int load_collector_config(const char *path, collector_config_t *config) {
         return -1;
     }
 
+    // [mode] 可选字段
     const char *mode = NULL;
     if (config_lookup_string(&cfg, "mode", &mode) && mode != NULL) {
         if (strlen(mode) >= sizeof(config->mode)) {
@@ -123,9 +139,10 @@ int load_collector_config(const char *path, collector_config_t *config) {
         memcpy(config->mode, mode, strlen(mode) + 1);
     }
 
+    // [poll_interval_sec] 可选字段
     config_lookup_int(&cfg, "poll_interval_sec", &config->poll_interval_sec);
 
-    /* database section */
+    // [database] 节
     config_setting_t *db = config_lookup(&cfg, "database");
     if (db != NULL) {
         const char *db_host = NULL, *db_user = NULL;
@@ -140,11 +157,13 @@ int load_collector_config(const char *path, collector_config_t *config) {
         if (db_name != NULL)     memcpy(config->db.name, db_name, strlen(db_name) + 1);
     }
 
+    // 解析设备列表
     if (load_devices(&cfg, config) != 0) {
         config_destroy(&cfg);
         return -1;
     }
 
+    // config_destroy(): 释放 libconfig 配置对象
     config_destroy(&cfg);
     return 0;
 }

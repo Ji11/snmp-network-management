@@ -78,8 +78,16 @@ refreshTopology();
 setInterval(refreshTopology, 60000);
 
 // ============================================================================
-// EasyUI DataGrid — 设备数据列表
+// EasyUI DataGrid — 设备数据列表（含接口流量汇总）
 // ============================================================================
+function formatTraffic(val) {
+    if (val === 0) return '0';
+    if (val >= 1073741824) return (val / 1073741824).toFixed(2) + ' GB';
+    if (val >= 1048576)    return (val / 1048576).toFixed(2) + ' MB';
+    if (val >= 1024)       return (val / 1024).toFixed(2) + ' KB';
+    return val + ' B';
+}
+
 $('#dg-devices').datagrid({
     url: '/api/devices',
     method: 'get',
@@ -87,11 +95,13 @@ $('#dg-devices').datagrid({
     singleSelect: true,
     pagination: false,
     columns: [[
-        {field: 'name', title: '设备', width: 15},
-        {field: 'sysName', title: '系统名称', width: 15},
-        {field: 'metric_cnt', title: '指标数', width: 10},
-        {field: 'last_update', title: '最近更新', width: 30},
-        {field: 'action', title: '详情', width: 15, formatter: function(v, row) {
+        {field: 'name', title: '设备', width: 10},
+        {field: 'sysName', title: '系统名称', width: 12},
+        {field: 'ifIn', title: '入流量', width: 12, formatter: function(v) { return formatTraffic(v); }},
+        {field: 'ifOut', title: '出流量', width: 12, formatter: function(v) { return formatTraffic(v); }},
+        {field: 'metric_cnt', title: '指标数', width: 8},
+        {field: 'last_update', title: '最近更新', width: 22},
+        {field: 'action', title: '详情', width: 10, formatter: function(v, row) {
             return '<a href="javascript:void(0)" onclick="showDeviceDetail(\'' + row.name + '\')">查看</a>';
         }}
     ]],
@@ -102,16 +112,19 @@ $('#dg-devices').datagrid({
                 var metrics = data.devices[k];
                 var sysName = '—';
                 var lastTs = '—';
+                var totalIn = 0, totalOut = 0;
                 if (metrics.length > 0) {
                     metrics.forEach(function(m) {
                         if (m.metric === 'sysName') sysName = m.value;
+                        if (m.metric.indexOf('ifInOctets') === 0)  totalIn  += parseFloat(m.value) || 0;
+                        if (m.metric.indexOf('ifOutOctets') === 0) totalOut += parseFloat(m.value) || 0;
                     });
                     var last = metrics.reduce(function(a, b) {
                         return a.created_at > b.created_at ? a : b;
                     });
                     lastTs = last.created_at;
                 }
-                rows.push({name: k, sysName: sysName, metric_cnt: metrics.length, last_update: lastTs});
+                rows.push({name: k, sysName: sysName, ifIn: totalIn, ifOut: totalOut, metric_cnt: metrics.length, last_update: lastTs});
             });
         }
         return {total: rows.length, rows: rows};
