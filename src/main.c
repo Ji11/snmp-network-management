@@ -87,7 +87,7 @@ int main(int argc, char *argv[]) {
         // 之前的 ftruncate 只改文件长度，不重置写入位置
         // 得先用 lseek 把读写位置移到开头
         lseek(pidfile_fd, 0, SEEK_SET);
-        if (write(pidfile_fd, buf, strlen(buf)) != (ssize_t)strlen(buf)) {}
+        write(pidfile_fd, buf, strlen(buf));
     }
 
     // 注册信号
