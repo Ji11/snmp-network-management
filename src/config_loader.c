@@ -5,122 +5,67 @@
 #include <stdlib.h>
 #include <string.h>
 
-// 从 libconfig setting 中读取字符串，写入 buffer
-int get_string_setting(const config_setting_t *setting, const char *name, char *buffer, size_t size) {
-    const char *value = NULL;
-    // config_setting_lookup_string(): 按 key 查找字符串值（libconfig API）
-    if (!config_setting_lookup_string(setting, name, &value) || value == NULL) {
-        return -1;
-    }
-
-    if (strlen(value) >= size) {
-        return -1;
-    }
-
-    // memcpy(): 内存复制，比 strcpy 更安全（已知长度时不需要搜索 \0）
-    memcpy(buffer, value, strlen(value) + 1);
-    return 0;
-}
-
-// 解析一个设备下的所有 metric 条目
-int load_device_metrics(config_setting_t *device_entry, target_config_t *target) {
-    // config_setting_get_member(): 获取 setting 的指定子成员
+// 解析一个设备的所有 metric 条目
+int load_device_metrics(config_setting_t *device_entry, target_t *target) {
+    // config_setting_get_member() 获取 setting 的指定子成员
     config_setting_t *metrics = config_setting_get_member(device_entry, "metrics");
-    if (metrics == NULL || !config_setting_is_list(metrics)) {
-        fprintf(stderr, "config error: device '%s' metrics must be a list\n", target->name);
-        return -1;
-    }
-
     int count = config_setting_length(metrics);
-    if (count <= 0 || count > MAX_METRICS_PER_DEVICE) {
-        fprintf(stderr, "config error: device '%s' metrics count must be between 1 and %d\n",
-                target->name, MAX_METRICS_PER_DEVICE);
-        return -1;
-    }
 
     target->metric_count = count;
     for (int i = 0; i < count; ++i) {
-        // config_setting_get_elem(): 获取 list 中第 i 个元素
         config_setting_t *item = config_setting_get_elem(metrics, i);
-        metric_config_t *metric = &target->metrics[i];
+        metric_t *metric = &target->metrics[i];
 
-        if (get_string_setting(item, "name", metric->name, sizeof(metric->name)) != 0 ||
-            get_string_setting(item, "oid", metric->oid_text, sizeof(metric->oid_text)) != 0) {
-            fprintf(stderr, "config error: invalid metric at index %d for device '%s'\n", i, target->name);
-            return -1;
-        }
+        const char *name = NULL, *oid = NULL;
+        config_setting_lookup_string(item, "name", &name);
+        config_setting_lookup_string(item, "oid", &oid);
+        memcpy(metric->name, name, strlen(name) + 1);
+        memcpy(metric->oid_text, oid, strlen(oid) + 1);
 
-        // memset(): 将指定内存区域全部置为 0
         memset(metric->oid, 0, sizeof(metric->oid));
         metric->oid_len = MAX_OID_LEN;
-        // snmp_parse_oid(): 将 "1.3.6.1..." 字符串解析为 Net-SNMP oid 数组
-        if (!snmp_parse_oid(metric->oid_text, metric->oid, &metric->oid_len)) {
-            snmp_perror(metric->oid_text);
-            return -1;
-        }
+        // snmp_parse_oid() 将 "1.3.6.1..." 字符串解析为 netsnmp 的 oid 数组
+        snmp_parse_oid(metric->oid_text, metric->oid, &metric->oid_len);
     }
 
     return 0;
 }
 
-// 解析 [devices] 数组
-int load_devices(config_t *cfg, collector_config_t *config) {
-    // config_lookup(): 按路径查找配置节（libconfig API）
+// 解析 devices 节点
+int load_devices(config_t *cfg, collector_t *config) {
+    // 找到 devices 节点
     config_setting_t *devices = config_lookup(cfg, "devices");
-    if (devices == NULL || !config_setting_is_list(devices)) {
-        fprintf(stderr, "config error: devices must be a list\n");
-        return -1;
-    }
-
     int count = config_setting_length(devices);
-    if (count <= 0 || count > MAX_TARGETS) {
-        fprintf(stderr, "config error: devices count must be between 1 and %d\n", MAX_TARGETS);
-        return -1;
-    }
-
     config->target_count = count;
+
     for (int i = 0; i < count; ++i) {
         config_setting_t *item = config_setting_get_elem(devices, i);
-        target_config_t *target = &config->targets[i];
 
-        if (get_string_setting(item, "name", target->name, sizeof(target->name)) != 0 ||
-            get_string_setting(item, "peer", target->peer, sizeof(target->peer)) != 0 ||
-            get_string_setting(item, "community", target->community, sizeof(target->community)) != 0 ||
-            get_string_setting(item, "version", target->version, sizeof(target->version)) != 0) {
-            fprintf(stderr, "config error: invalid device at index %d\n", i);
-            return -1;
-        }
+        // 写入 target 中
+        const char *name = NULL, *peer = NULL, *community = NULL, *version = NULL;
+        config_setting_lookup_string(item, "name", &name);
+        config_setting_lookup_string(item, "peer", &peer);
+        config_setting_lookup_string(item, "community", &community);
+        config_setting_lookup_string(item, "version", &version);
+        memcpy(config->targets[i].name, name, strlen(name) + 1);
+        memcpy(config->targets[i].peer, peer, strlen(peer) + 1);
+        memcpy(config->targets[i].community, community, strlen(community) + 1);
+        memcpy(config->targets[i].version, version, strlen(version) + 1);
 
-        // 可选字段：retries 和 timeout_ms，不写则用默认值
-        target->retries = 1;
-        target->timeout_ms = 1000;
-        // config_setting_lookup_int(): 按 key 查找 int 值
-        config_setting_lookup_int(item, "retries", &target->retries);
-        config_setting_lookup_int(item, "timeout_ms", &target->timeout_ms);
-
-        if (load_device_metrics(item, target) != 0) {
-            return -1;
-        }
+        if (load_device_metrics(item, &config->targets[i]) != 0) return -1;
     }
 
     return 0;
 }
 
-// 加载完整配置文件，填充 collector_config_t 结构体
-int load_collector_config(const char *path, collector_config_t *config) {
+// 加载完整配置文件，填充 collector_t 结构体
+int load_collector_config(char *path, collector_t *config) {
     config_t cfg;
-
-    if (path == NULL || config == NULL) {
-        return -1;
-    }
+    if (path == NULL || config == NULL) return -1;
 
     memset(config, 0, sizeof(*config));
-    strcpy(config->mode, "sync");
-    config->poll_interval_sec = 5;
-
-    // config_init(): 初始化 libconfig 配置对象
     config_init(&cfg);
-    // config_read_file(): 从文件解析配置
+    // 读配置文件
     if (!config_read_file(&cfg, path)) {
         fprintf(stderr, "config read error: %s:%d - %s\n",
                 config_error_file(&cfg), config_error_line(&cfg), config_error_text(&cfg));
@@ -128,36 +73,23 @@ int load_collector_config(const char *path, collector_config_t *config) {
         return -1;
     }
 
-    // [mode] 可选字段
-    const char *mode = NULL;
-    if (config_lookup_string(&cfg, "mode", &mode) && mode != NULL) {
-        if (strlen(mode) >= sizeof(config->mode)) {
-            fprintf(stderr, "config error: mode is too long\n");
-            config_destroy(&cfg);
-            return -1;
-        }
-        memcpy(config->mode, mode, strlen(mode) + 1);
-    }
-
-    // [poll_interval_sec] 可选字段
-    config_lookup_int(&cfg, "poll_interval_sec", &config->poll_interval_sec);
-
     // [database] 节
     config_setting_t *db = config_lookup(&cfg, "database");
     if (db != NULL) {
-        const char *db_host = NULL, *db_user = NULL;
-        const char *db_password = NULL, *db_name = NULL;
+        // config_setting_lookup_string 第三个参数要求 const
+        const char *db_host = NULL, *db_user = NULL, *db_password = NULL, *db_name = NULL;
+        
         config_setting_lookup_string(db, "host", &db_host);
         config_setting_lookup_string(db, "user", &db_user);
         config_setting_lookup_string(db, "password", &db_password);
         config_setting_lookup_string(db, "name", &db_name);
-        if (db_host != NULL)     memcpy(config->db.host, db_host, strlen(db_host) + 1);
-        if (db_user != NULL)     memcpy(config->db.user, db_user, strlen(db_user) + 1);
-        if (db_password != NULL) memcpy(config->db.password, db_password, strlen(db_password) + 1);
-        if (db_name != NULL)     memcpy(config->db.name, db_name, strlen(db_name) + 1);
+        // 读入数据库连接信息
+        memcpy(config->db.host, db_host, strlen(db_host) + 1);
+        memcpy(config->db.user, db_user, strlen(db_user) + 1);
+        memcpy(config->db.password, db_password, strlen(db_password) + 1);
+        memcpy(config->db.name, db_name, strlen(db_name) + 1);
     }
 
-    // 解析设备列表
     if (load_devices(&cfg, config) != 0) {
         config_destroy(&cfg);
         return -1;

@@ -10,7 +10,7 @@
 // 每个设备的异步会话状态，对应 asynchapp.c 的 struct session
 typedef struct {
     netsnmp_session *sess;
-    const target_config_t *target;
+    target_t *target;
     int current_metric;  // 当前正在采集第几个 OID
 } device_session_t;
 
@@ -19,7 +19,7 @@ static MYSQL *db_conn = NULL;
 static int active_hosts = 0;
 
 // 将 SNMP 变量值格式化为可读字符串
-void format_value(const netsnmp_variable_list *vars, char *buffer, size_t size) {
+void format_value(netsnmp_variable_list *vars, char *buffer, size_t size) {
     // snprint_value(): Net-SNMP 函数，将 OID+值 格式化为 "OID: value" 字符串
     snprint_value(buffer, size, vars->name, vars->name_length, vars);
 }
@@ -27,8 +27,8 @@ void format_value(const netsnmp_variable_list *vars, char *buffer, size_t size) 
 // 处理单个 SNMP 响应，打印结果并写入数据库
 // 对应 asynchapp.c 的 print_result 函数
 int print_result(int status, netsnmp_session *sp, netsnmp_pdu *pdu,
-                 const char *device_name, const char *metric_name,
-                 const char *oid_text) {
+                 char *device_name, char *metric_name,
+                 char *oid_text) {
     char buf[1024];
     struct timeval now;
     struct timezone tz;
@@ -86,17 +86,17 @@ int asynch_response(int operation, netsnmp_session *sp, int reqid,
     (void)sp;
     (void)reqid;
     device_session_t *host = (device_session_t *)magic;
-    const target_config_t *target = host->target;
+    target_t *target = host->target;
 
     if (operation == NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) {
-        const metric_config_t *metric = &target->metrics[host->current_metric];
+        metric_t *metric = &target->metrics[host->current_metric];
 
         if (print_result(STAT_SUCCESS, host->sess, pdu,
                          target->name, metric->name, metric->oid_text)) {
             // 推进到下一个 OID
             host->current_metric++;
             if (host->current_metric < target->metric_count) {
-                const metric_config_t *next = &target->metrics[host->current_metric];
+                metric_t *next = &target->metrics[host->current_metric];
                 // snmp_pdu_create(): 创建指定类型的 SNMP PDU
                 netsnmp_pdu *req = snmp_pdu_create(SNMP_MSG_GET);
                 // snmp_add_null_var(): 向 PDU 添加一个 OID（值为 NULL，GET 请求用）
@@ -110,7 +110,7 @@ int asynch_response(int operation, netsnmp_session *sp, int reqid,
         }
     } else {
         // 超时或发送失败
-        const metric_config_t *metric = NULL;
+        metric_t *metric = NULL;
         if (host->current_metric >= 0 && host->current_metric < target->metric_count)
             metric = &target->metrics[host->current_metric];
         print_result(STAT_TIMEOUT, host->sess, pdu,
@@ -125,7 +125,7 @@ int asynch_response(int operation, netsnmp_session *sp, int reqid,
 }
 
 // 版本字符串 → Net-SNMP 版本常量
-long version_from_text(const char *version) {
+long version_from_text(char *version) {
     if (strcmp(version, "1") == 0 || strcmp(version, "v1") == 0)
         return SNMP_VERSION_1;
     if (strcmp(version, "2c") == 0 || strcmp(version, "v2c") == 0)
@@ -135,7 +135,7 @@ long version_from_text(const char *version) {
 
 // 一轮异步 SNMP 采集
 // 三阶段：初始化会话并发送首个 GET → select 事件循环 → 清理
-int run_async_collection(const collector_config_t *config) {
+int run_async_collection(collector_t *config) {
     if (config == NULL) return -1;
 
     // 连接数据库
@@ -156,7 +156,7 @@ int run_async_collection(const collector_config_t *config) {
 
     // === 阶段 1: 为每个设备打开 SNMP 会话，发送第一个 GET ===
     for (int i = 0; i < n; i++) {
-        const target_config_t *target = &config->targets[i];
+        target_t *target = &config->targets[i];
         device_session_t *hs = &sessions[i];
 
         netsnmp_session sess;
@@ -166,8 +166,8 @@ int run_async_collection(const collector_config_t *config) {
         sess.community = (u_char *)strdup(target->community);
         sess.community_len = strlen(target->community);
         sess.version = version_from_text(target->version);
-        sess.retries = target->retries;
-        sess.timeout = target->timeout_ms * 1000L;
+        sess.retries = 1;
+        sess.timeout = 1000000L;  // 1 秒超时（单位：微秒）
         sess.callback = asynch_response;
         sess.callback_magic = hs;
 
@@ -184,7 +184,7 @@ int run_async_collection(const collector_config_t *config) {
         free(sess.peername);
         free(sess.community);
 
-        const metric_config_t *metric = &target->metrics[0];
+        metric_t *metric = &target->metrics[0];
         netsnmp_pdu *req = snmp_pdu_create(SNMP_MSG_GET);
         snmp_add_null_var(req, metric->oid, metric->oid_len);
         if (snmp_send(hs->sess, req))

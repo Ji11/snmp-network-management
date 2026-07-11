@@ -6,7 +6,7 @@
 #include <time.h>
 
 // 连接 MySQL，自动建库建表
-MYSQL *db_connect(const db_config_t *config) {
+MYSQL *db_connect(db_t *config) {
     // mysql_init(): 分配并初始化 MYSQL 连接句柄
     MYSQL *conn = mysql_init(NULL);
     if (conn == NULL) {
@@ -45,7 +45,7 @@ MYSQL *db_connect(const db_config_t *config) {
     }
 
     // 建表
-    const char *create_table =
+    char *create_table =
         "CREATE TABLE IF NOT EXISTS snmp_data ("
         "  id         INT AUTO_INCREMENT PRIMARY KEY,"
         "  device     VARCHAR(32)  NOT NULL,"
@@ -66,8 +66,8 @@ MYSQL *db_connect(const db_config_t *config) {
 }
 
 // 写入一条采集数据
-int db_insert(MYSQL *conn, const char *device_name, const char *metric_name,
-              const char *oid, const char *value) {
+int db_insert(MYSQL *conn, char *device_name, char *metric_name,
+              char *oid, char *value) {
     if (conn == NULL || device_name == NULL || metric_name == NULL
         || oid == NULL || value == NULL) {
         return -1;
