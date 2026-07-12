@@ -13,7 +13,6 @@
 sig_atomic_t running = 1;
 
 void signal_handler(int sig) {
-    (void)sig;
     running = 0;
 }
 
@@ -98,7 +97,7 @@ int main(int argc, char *argv[]) {
 
     // 异步循环 每 60s 进行一轮异步 SNMP 采集
     while (running) {
-        run_async_collection(&config);
+        collect_async(&config);
         if (!running) break;
         sleep(60);
     }

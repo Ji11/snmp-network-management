@@ -6,15 +6,15 @@
 #include <string.h>
 
 // 解析一个设备的所有 metric 条目
-int load_device_metrics(config_setting_t *device_entry, target_t *target) {
+int load_device_metrics(config_setting_t *device_entry, device_t *device) {
     // config_setting_get_member() 获取 setting 的指定子成员
     config_setting_t *metrics = config_setting_get_member(device_entry, "metrics");
     int count = config_setting_length(metrics);
 
-    target->metric_count = count;
+    device->metric_count = count;
     for (int i = 0; i < count; ++i) {
         config_setting_t *item = config_setting_get_elem(metrics, i);
-        metric_t *metric = &target->metrics[i];
+        metric_t *metric = &device->metrics[i];
 
         const char *name = NULL, *oid = NULL;
         config_setting_lookup_string(item, "name", &name);
@@ -36,23 +36,21 @@ int load_devices(config_t *cfg, collector_t *config) {
     // 找到 devices 节点
     config_setting_t *devices = config_lookup(cfg, "devices");
     int count = config_setting_length(devices);
-    config->target_count = count;
+    config->device_count = count;
 
     for (int i = 0; i < count; ++i) {
         config_setting_t *item = config_setting_get_elem(devices, i);
 
-        // 写入 target 中
-        const char *name = NULL, *peer = NULL, *community = NULL, *version = NULL;
+        // 写入 device 中
+        const char *name = NULL, *peer = NULL, *community = NULL;
         config_setting_lookup_string(item, "name", &name);
         config_setting_lookup_string(item, "peer", &peer);
         config_setting_lookup_string(item, "community", &community);
-        config_setting_lookup_string(item, "version", &version);
-        memcpy(config->targets[i].name, name, strlen(name) + 1);
-        memcpy(config->targets[i].peer, peer, strlen(peer) + 1);
-        memcpy(config->targets[i].community, community, strlen(community) + 1);
-        memcpy(config->targets[i].version, version, strlen(version) + 1);
+        memcpy(config->devices[i].name, name, strlen(name) + 1);
+        memcpy(config->devices[i].peer, peer, strlen(peer) + 1);
+        memcpy(config->devices[i].community, community, strlen(community) + 1);
 
-        if (load_device_metrics(item, &config->targets[i]) != 0) return -1;
+        if (load_device_metrics(item, &config->devices[i]) != 0) return -1;
     }
 
     return 0;
