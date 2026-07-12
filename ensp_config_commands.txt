@@ -69,13 +69,15 @@
 ###############################################################################
 
 #  OSPF Area 0:
-#    Area 0 仅包含 R1↔C1 (10.1.1.12/30)、R1↔C2 (10.1.1.16/30)
+#    Area 0 包含 R1↔C1 (10.1.1.12/30)、R1↔C2 (10.1.1.16/30)、
+#    C1↔C2 Eth-Trunk (10.1.1.0/30) 三条链路
 #
-#  路由传播 (C1/C2 间路由经 R1 中转):
+#  路由传播:
 #    R1 import-route direct (10.1.1.24/30 Internet 侧) → AS External
 #    C1 静态路由 (192.168.2/3.0/24) → import-route static → AS External
 #    C2 静态路由 (192.168.4/5.0/24) → import-route static → AS External
 #    C2 直连 192.168.179.0/24 → import-route direct → AS External
+#    C2 静态路由 (10.1.1.4/30) → import-route static → AS External  (C1↔D1 链路，C1未通告)
 #    D1/D2 默认路由 → 上联核心
 
 
@@ -191,6 +193,7 @@ interface Vlanif10
 # ---- 静态路由 ----
 ip route-static 192.168.4.0 255.255.255.0 10.1.1.10
 ip route-static 192.168.5.0 255.255.255.0 10.1.1.10
+ip route-static 10.1.1.4 255.255.255.252 10.1.1.1   # C1↔D1 直连链路，C1 未通过 OSPF 通告
 
 # ---- ACL + Route-Policy (控制 import-route direct 范围) ----
 acl 2000
@@ -201,12 +204,13 @@ route-policy CloudNet permit node 10
  quit
 
 # ---- OSPF Area 0 ----
-# Area 0 对C2来说 仅含 C2↔R1 (10.1.1.16/30) 一条链路
+# Area 0 包含 C2↔R1 (10.1.1.16/30) 和 C2↔C1 Eth-Trunk (10.1.1.0/30)
 # Cloud 网段 + D2 下联网段通过 import-route 注入为 AS External
 ospf 1 router-id 2.2.2.2
  silent-interface Vlanif102
  area 0.0.0.0
   network 10.1.1.16 0.0.0.3
+  network 10.1.1.0 0.0.0.3    # Eth-Trunk1 → C1 (提供冗余路径)
  import-route static
  import-route direct route-policy CloudNet
 
@@ -271,11 +275,12 @@ ip route-static 192.168.2.0 255.255.255.0 10.1.1.6
 ip route-static 192.168.3.0 255.255.255.0 10.1.1.6
 
 # ---- OSPF Area 0 ----
-# Area 0 仅含 R1↔C1 (10.1.1.12/30) 一条链路
+# Area 0 包含 R1↔C1 (10.1.1.12/30) 和 C1↔C2 Eth-Trunk (10.1.1.0/30)
 ospf 1 router-id 1.1.1.1
  silent-interface Vlanif101
  area 0.0.0.0
   network 10.1.1.12 0.0.0.3
+  network 10.1.1.0 0.0.0.3    # Eth-Trunk1 → C2 (提供冗余路径)
  import-route static
 
 save
@@ -429,28 +434,28 @@ display ospf peer brief
 
 # C1:
 display ospf peer brief
-# 预期: 仅与 R1 (3.3.3.3) 为 FULL (C2 不在 Area 0, 无直接邻接)
+# 预期: 与 R1 (3.3.3.3) 和 C2 (2.2.2.2) 均为 FULL
 
 # C2:
 display ospf peer brief
-# 预期: 仅与 R1 (3.3.3.3) 为 FULL (C1 不在 Area 0, 无直接邻接)
+# 预期: 与 R1 (3.3.3.3) 和 C1 (1.1.1.1) 均为 FULL
 
 # --- 7.4 OSPF 路由表检查 ---
 # R1:
 display ospf routing
-# Area 0 内: 10.1.1.12/30, 10.1.1.16/30 (无 10.1.1.0/30, Eth-Trunk 不在 Area 0)
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30, 10.1.1.0/30 (Eth-Trunk)
 # AS External: 192.168.2/3.0/24 (C1 import), 192.168.4/5.0/24 (C2 import)
 #              192.168.179.0/24 (C2 import)
 
 # C1:
 display ospf routing
-# Area 0 内: 10.1.1.12/30, 10.1.1.16/30
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30, 10.1.1.0/30
 # AS External: 10.1.1.24/30 (R1 import), 192.168.4/5.0/24 (C2 import)
 #              192.168.179.0/24 (C2 import)
 
 # C2:
 display ospf routing
-# Area 0 内: 10.1.1.12/30, 10.1.1.16/30
+# Area 0 内: 10.1.1.12/30, 10.1.1.16/30, 10.1.1.0/30
 # AS External: 10.1.1.24/30 (R1 import), 192.168.2/3.0/24 (C1 import)
 
 # --- 7.5 全局路由表检查 ---
@@ -492,7 +497,17 @@ display ospf peer brief
 interface GE1/0/2
  undo shutdown
 
-# --- 7.8 核心链路冗余测试 ---
+# --- 7.8 OSPF 冗余测试 (老师验收) ---
+# C2 上断开连接 R1 的接口:
+interface GE1/0/1
+ shutdown
+# 从 C2 ping InterNet1 (10.1.1.26)，应仍通 (走 C2→C1 Eth-Trunk→R1→InterNet1)
+ping 10.1.1.26
+# 恢复:
+interface GE1/0/1
+ undo shutdown
+
+# --- 7.9 核心链路冗余测试 ---
 # R1 同时有两条路径到 C1/C2, shutdown 一条:
 interface GigabitEthernet0/0/1
  shutdown

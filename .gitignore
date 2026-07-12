@@ -3,4 +3,6 @@ web/vendor/
 *.pid
 *.png
 *.jpg
+*.pdf
+*.docx
 .claude/

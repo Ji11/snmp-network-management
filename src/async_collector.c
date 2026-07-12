@@ -74,10 +74,10 @@ int collect_async(collector_t *config) {
 
     // 连接数据库
     db_conn = db_connect(&config->db);
+    db_cleanup(db_conn);
 
     int n = config->device_count;
-    // calloc() 即 malloc + 自动清零，n 个元素每个大小为 sizeof(device_session_t)
-    device_session_t *sessions = calloc(n, sizeof(device_session_t));
+    device_session_t *sessions = malloc(n * sizeof(device_session_t));
 
     active_hosts = 0;
 

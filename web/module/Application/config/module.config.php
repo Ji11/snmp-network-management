@@ -12,10 +12,14 @@ use Laminas\ServiceManager\Factory\InvokableFactory;
 use PDO;
 
 return [
+    // URL 路由
+    // type: Literal = 精确匹配, Segment = 路径参数匹配（如 /api/device/:name）
+    // defaults: 指定匹配成功后调哪个 Controller 的哪个 Action
     'router' => [
         'routes' => [
+            // GET / → IndexController::indexAction（首页）
             'home' => [
-                'type'    => Literal::class,
+                'type'    => Literal::class,    // 精确匹配 '/'
                 'options' => [
                     'route'    => '/',
                     'defaults' => [
@@ -24,8 +28,9 @@ return [
                     ],
                 ],
             ],
+            // GET /api/topology → ApiController::topologyAction
             'api-topology' => [
-                'type'    => Literal::class,
+                'type'    => Literal::class,    // 精确匹配 '/api/topology'
                 'options' => [
                     'route'    => '/api/topology',
                     'defaults' => [
@@ -34,8 +39,9 @@ return [
                     ],
                 ],
             ],
+            // GET /api/devices → ApiController::devicesAction
             'api-devices' => [
-                'type'    => Literal::class,
+                'type'    => Literal::class,    // 精确匹配 '/api/devices'
                 'options' => [
                     'route'    => '/api/devices',
                     'defaults' => [
@@ -44,8 +50,9 @@ return [
                     ],
                 ],
             ],
+            // GET /api/device/:name → ApiController::deviceAction
             'api-device' => [
-                'type'    => Segment::class,
+                'type'    => Segment::class,     // :name 匹配路径参数，如 /api/device/R1
                 'options' => [
                     'route'    => '/api/device/:name',
                     'constraints' => ['name' => '[a-zA-Z0-9._-]+'],
@@ -55,6 +62,7 @@ return [
                     ],
                 ],
             ],
+            // GET /api/metrics/ifInOctets → 时序数据 折线图 / 饼图
             'api-metrics' => [
                 'type'    => Segment::class,
                 'options' => [
@@ -68,9 +76,13 @@ return [
             ],
         ],
     ],
+
+    // 控制器注册
     'controllers' => [
         'factories' => [
+            // IndexController 不需要依赖注入，直接 Invokable
             IndexController::class => InvokableFactory::class,
+            // ApiController 需要 PDO 连接，用匿名工厂注入
             ApiController::class   => function ($container) {
                 $config = $container->get('config');
                 $db = $config['db'] ?? [];
@@ -85,13 +97,16 @@ return [
             },
         ],
     ],
+
+    // 视图配置
     'view_manager' => [
-        'strategies' => ['ViewJsonStrategy'],
+        'strategies' => ['ViewJsonStrategy'],  // 允许 Action 返回 JsonModel
         'display_not_found_reason' => true,
         'display_exceptions'       => true,
         'doctype'                  => 'HTML5',
         'not_found_template'       => 'error/404',
         'exception_template'       => 'error/index',
+        // 模板文件路径映射
         'template_map' => [
             'layout/layout'           => __DIR__ . '/../view/layout/layout.phtml',
             'application/index/index' => __DIR__ . '/../view/application/index/index.phtml',

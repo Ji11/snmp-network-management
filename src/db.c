@@ -63,6 +63,12 @@ int db_insert(MYSQL *conn, char *device_name, char *metric_name, char *oid, char
     return 0;
 }
 
+void db_cleanup(MYSQL *conn) {
+    if (conn == NULL) return;
+    mysql_query(conn,
+        "DELETE FROM snmp_data WHERE created_at < NOW() - INTERVAL 2 DAY");
+}
+
 void db_close(MYSQL *conn) {
     if (conn != NULL) mysql_close(conn);
 }

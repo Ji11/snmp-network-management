@@ -4,42 +4,50 @@
  */
 ?>
 <div class="container">
+    <!-- vis.js 拓扑图 -->
     <div class="panel-topo"><div id="topology"></div></div>
+    <!-- EasyUI 设备数据表格 -->
     <div class="panel-datagrid"><table id="dg-devices"></table></div>
+    <!-- ECharts 图表-->
     <div class="panel-charts">
         <div class="chart-box"><div id="chart-line"></div></div>
         <div class="chart-box"><div id="chart-pie"></div></div>
     </div>
 </div>
+
 <?php $this->inlineScript()->captureStart(); ?>
-// ============================================================================
-// Vis.js 网络拓扑 — 60s ICMP 监测
-// ============================================================================
-var nodesDS = new vis.DataSet([]);
-var edgesDS = new vis.DataSet([]);
+
+// 一、Vis.js 网络拓扑 — 固定布局 + 60s ICMP 颜色刷新
+
+var nodesDS = new vis.DataSet([]);   // 节点集合
+var edgesDS = new vis.DataSet([]);   // 连线集合
 
 var topologyEl = document.getElementById('topology');
 var network = new vis.Network(topologyEl, {nodes: nodesDS, edges: edgesDS}, {
+    // 连线样式 平滑曲线，无箭头
     edges: {
         smooth: {type: 'continuous'},
         arrows: {to: {enabled: false}}
     },
+    // 5 种设备分组，不同形状（颜色由 API ping 结果决定 green/red）
     groups: {
-        router:  {color: {background: '#e67e22', border: '#d35400'}, shape: 'box'},
-        switch:  {color: {background: '#3498db', border: '#2980b9'}, shape: 'box'},
-        pc:      {color: {background: '#2ecc71', border: '#27ae60'}, shape: 'ellipse'},
-        cloud:   {color: {background: '#95a5a6', border: '#7f8c8d'}, shape: 'triangle'},
-        server:  {color: {background: '#9b59b6', border: '#8e44ad'}, shape: 'diamond'}
+        router:  {shape: 'box'},
+        switch:  {shape: 'box'},
+        pc:      {shape: 'ellipse'},
+        cloud:   {shape: 'triangle'},
+        server:  {shape: 'diamond'}
     },
     physics: false,
     layout: {randomSeed: 0},
     interaction: {
         dragNodes: false,
         dragView: false,
-        zoomView: false
+        zoomView: false,
+        selectable: false
     }
 });
 
+// 12 个节点的固定坐标
 var positions = {
     'InterNet1': {x: 100, y: -200},
     'R1':        {x: 0,   y: -100},
@@ -55,9 +63,11 @@ var positions = {
     'PC-D':      {x: 400,  y: 300}
 };
 
+// 拉取 /api/topology，首次加载设固定位置，后续只更新节点颜色
 function refreshTopology() {
     $.getJSON('/api/topology', function(data) {
         if (nodesDS.length === 0) {
+            // 首次加载 设位置，渲染所有节点和边
             data.nodes.forEach(function(n) {
                 n.x = positions[n.id] ? positions[n.id].x : 0;
                 n.y = positions[n.id] ? positions[n.id].y : 0;
@@ -67,6 +77,7 @@ function refreshTopology() {
             edgesDS.add(data.edges);
             network.fit({animation: false});
         } else {
+            // 后续刷新 只更新颜色
             data.nodes.forEach(function(n) {
                 nodesDS.update({id: n.id, color: n.color});
             });
@@ -75,11 +86,11 @@ function refreshTopology() {
 }
 
 refreshTopology();
-setInterval(refreshTopology, 60000);
+setInterval(refreshTopology, 60000);  // 每 60 秒刷新一次拓扑颜色
 
-// ============================================================================
-// EasyUI DataGrid — 设备数据列表（含接口流量汇总）
-// ============================================================================
+// 二、EasyUI DataGrid — 设备数据列表（含接口流量汇总）
+
+// 流量数值自动转换单位
 function formatTraffic(val) {
     if (val === 0) return '0';
     if (val >= 1073741824) return (val / 1073741824).toFixed(2) + ' GB';
@@ -89,11 +100,12 @@ function formatTraffic(val) {
 }
 
 $('#dg-devices').datagrid({
-    url: '/api/devices',
+    url: '/api/devices',      // 数据源
     method: 'get',
     fitColumns: true,
     singleSelect: true,
     pagination: false,
+    // 7 列：设备名 | 系统名称 | 入流量 | 出流量 | 指标数 | 最近更新 | 详情按钮
     columns: [[
         {field: 'name', title: '设备', width: 10},
         {field: 'sysName', title: '系统名称', width: 12},
@@ -105,6 +117,7 @@ $('#dg-devices').datagrid({
             return '<a href="javascript:void(0)" onclick="showDeviceDetail(\'' + row.name + '\')">查看</a>';
         }}
     ]],
+    // 把 API 返回的 {devices: {R1: [...], ...}} 转为表格行数组
     loadFilter: function(data) {
         var rows = [];
         if (data.devices) {
@@ -114,11 +127,13 @@ $('#dg-devices').datagrid({
                 var lastTs = '—';
                 var totalIn = 0, totalOut = 0;
                 if (metrics.length > 0) {
+                    // 遍历所有 metric：找 sysName + 累加 ifInOctets / ifOutOctets
                     metrics.forEach(function(m) {
                         if (m.metric === 'sysName') sysName = m.value;
                         if (m.metric.indexOf('ifInOctets') === 0)  totalIn  += parseFloat(m.value) || 0;
                         if (m.metric.indexOf('ifOutOctets') === 0) totalOut += parseFloat(m.value) || 0;
                     });
+                    // 找最新时间戳
                     var last = metrics.reduce(function(a, b) {
                         return a.created_at > b.created_at ? a : b;
                     });
@@ -131,41 +146,113 @@ $('#dg-devices').datagrid({
     }
 });
 
+// 详情：汇总表 + 分接口明细表
 function showDeviceDetail(name) {
     $.getJSON('/api/device/' + encodeURIComponent(name), function(data) {
-        if (data.metrics && data.metrics.length > 0) {
-            var html = '<table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">';
+        if (!data.metrics || data.metrics.length === 0) return;
+
+        // 按指标名分类：分接口指标（带 .数字 后缀）汇总，独立指标单独列出
+        var summary = {};   // key: 指标基名 → {total, unit, sample_oid}
+        var ifMetrics = []; // 分接口指标的明细行
+        var otherMetrics = []; // 独立指标（sysName, mem* 等）
+
+        data.metrics.forEach(function(m) {
+            var dotIdx = m.metric.lastIndexOf('.');
+            // 判断是不是分接口指标：末尾带 .数字
+            var isInterface = false;
+            if (dotIdx > 0) {
+                var suffix = m.metric.substring(dotIdx + 1);
+                isInterface = /^\d+$/.test(suffix);
+            }
+
+            if (isInterface) {
+                var base = m.metric.substring(0, dotIdx);
+                if (!summary[base]) {
+                    summary[base] = {total: 0, unit: '', oid: m.oid};
+                }
+                // 从 value 里提取数值部分（去掉 "Counter32: " 前缀后 parseFloat 已经做了）
+                var val = parseFloat(m.value) || 0;
+                summary[base].total += val;
+                ifMetrics.push(m);
+            } else {
+                otherMetrics.push(m);
+            }
+        });
+
+        var html = '';
+
+        if (ifMetrics.length > 0) {
+            // 有接口指标的设备（R1/C1/C2/D1/D2）：汇总表 + 分接口明细
+            html += '<h4 style="margin:5px 0">汇总</h4>';
+            html += '<table style="width:100%;border-collapse:collapse;margin-bottom:10px" border="1" cellpadding="4">';
+            html += '<tr style="background:#e8f0fe"><th>指标</th><th>值 / 累计值</th><th>接口数</th></tr>';
+
+            otherMetrics.forEach(function(m) {
+                if (m.metric === 'sysName') {
+                    html += '<tr><td>sysName</td><td>' + m.value + '</td><td>—</td></tr>';
+                }
+            });
+
+            var ifCount = {};
+            ifMetrics.forEach(function(m) {
+                var base = m.metric.substring(0, m.metric.lastIndexOf('.'));
+                ifCount[base] = (ifCount[base] || 0) + 1;
+            });
+            Object.keys(summary).sort().forEach(function(key) {
+                var count = ifCount[key] || 1;
+                html += '<tr><td>' + key + '</td><td>' + formatTraffic(summary[key].total) + '</td><td>' + count + '</td></tr>';
+            });
+            html += '</table>';
+
+            html += '<h4 style="margin:5px 0">分接口明细</h4>';
+            html += '<table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">';
             html += '<tr style="background:#f5f5f5"><th>Metric</th><th>OID</th><th>Value</th><th>Time</th></tr>';
-            data.metrics.forEach(function(m) {
+
+            otherMetrics.forEach(function(m) {
+                html += '<tr><td>' + m.metric + '</td><td>' + m.oid + '</td><td>' + m.value + '</td><td>' + m.created_at + '</td></tr>';
+            });
+            ifMetrics.forEach(function(m) {
                 html += '<tr><td>' + m.metric + '</td><td>' + m.oid + '</td><td>' + m.value + '</td><td>' + m.created_at + '</td></tr>';
             });
             html += '</table>';
-            $('#dlg-detail').html(html).dialog({title: name + ' 详情', width: 750, height: 450, closed: false});
+        } else {
+            // 无接口指标的设备（VM）：单表列出所有指标
+            html += '<table style="width:100%;border-collapse:collapse" border="1" cellpadding="4">';
+            html += '<tr style="background:#e8f0fe"><th>Metric</th><th>OID</th><th>Value</th><th>Time</th></tr>';
+            otherMetrics.forEach(function(m) {
+                html += '<tr><td>' + m.metric + '</td><td>' + m.oid + '</td><td>' + m.value + '</td><td>' + m.created_at + '</td></tr>';
+            });
+            html += '</table>';
         }
+
+        $('#dlg-detail').html(html).dialog({title: name + ' 详情', width: 750, height: 500, closed: false});
     });
 }
+// EasyUI dialog 容器（隐藏，点击详情时显示）
 $('body').append('<div id="dlg-detail"></div>');
 
-// ============================================================================
-// ECharts — ifInOctets 折线图 + 内存饼图
-// ============================================================================
+// 三、ECharts 图表 — ifInOctets 折线图 + VM 内存饼图 + 60s 刷新
 var lineChart = echarts.init(document.getElementById('chart-line'));
 var pieChart  = echarts.init(document.getElementById('chart-pie'));
 
 function refreshCharts() {
-    // ifInOctets line chart
+    // --- ifInOctets 折线图：每个 (设备.接口) 一条线 ---
     $.getJSON('/api/metrics/ifInOctets', function(data) {
         var seriesMap = {};
+        // 按 "设备名.接口后缀" 分组
         data.data.forEach(function(row) {
             var key = row.device + '.' + row.metric.replace('ifInOctets.', '');
             if (!seriesMap[key]) seriesMap[key] = [];
             seriesMap[key].push({time: row.created_at, value: parseFloat(row.value) || 0});
         });
+
         var series = [];
         var allTimes = [];
         Object.keys(seriesMap).forEach(function(k) {
+            // 按时间排序
             var points = seriesMap[k].sort(function(a, b) { return a.time.localeCompare(b.time); });
             var values = points.map(function(p) { return p.value; });
+            // 跳过全零的 series（没有流量的接口不显示）
             var hasData = values.some(function(v) { return v > 0; });
             if (hasData) {
                 if (allTimes.length === 0) {
@@ -174,6 +261,7 @@ function refreshCharts() {
                 series.push({name: k, type: 'line', data: values});
             }
         });
+
         lineChart.setOption({
             title: {text: 'ifInOctets 流量', left: 'center', textStyle: {fontSize: 14}},
             tooltip: {trigger: 'axis'},
@@ -185,7 +273,7 @@ function refreshCharts() {
         });
     });
 
-    // Memory pie chart
+    // VM 物理内存饼图
     $.getJSON('/api/metrics/memTotalReal', function(dataTotal) {
         $.getJSON('/api/metrics/memAvailReal', function(dataAvail) {
             var total = 0, avail = 0;
@@ -197,6 +285,7 @@ function refreshCharts() {
                 title: {text: 'VM 物理内存', left: 'center', textStyle: {fontSize: 14}},
                 tooltip: {trigger: 'item', formatter: '{b}: {c} KB ({d}%)'},
                 legend: {bottom: 0},
+                // 实心饼图 radius='70%'
                 series: [{
                     type: 'pie', radius: '70%',
                     data: [
@@ -211,10 +300,12 @@ function refreshCharts() {
 }
 
 refreshCharts();
-setInterval(refreshCharts, 60000);
+setInterval(refreshCharts, 60000);  // 每 60 秒刷新图表
 
+// 窗口大小变化时图表自适应
 window.addEventListener('resize', function() {
     lineChart.resize();
     pieChart.resize();
 });
+
 <?php $this->inlineScript()->captureEnd(); ?>

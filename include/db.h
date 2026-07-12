@@ -5,6 +5,7 @@
 
 MYSQL *db_connect(db_t *config);
 int db_insert(MYSQL *conn, char *device_name, char *metric_name, char *oid, char *value);
+void db_cleanup(MYSQL *conn);
 void db_close(MYSQL *conn);
 
 #endif
