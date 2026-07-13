@@ -10,7 +10,7 @@
 
 #define PID_FILE "/tmp/async_collector.pid"
 
-sig_atomic_t running = 1;
+int running = 1;
 
 void signal_handler(int sig) {
     running = 0;

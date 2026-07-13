@@ -6,29 +6,23 @@
 #include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
 
-#define MAX_DEVICES 32
-#define MAX_METRICS_PER_DEVICE 64
-#define COLLECTOR_NAME_LEN 64
-#define MAX_ADDR_LEN 128
-#define MAX_COMMUNITY_LEN 64
-#define MAX_OID_TEXT_LEN 128
 #define MAX_VALUE_LEN 256
 
 // metrics 列表中的一项: { name = "..."; oid = "..."; }
 typedef struct {
-    char name[COLLECTOR_NAME_LEN];
-    char oid_text[MAX_OID_TEXT_LEN];
+    char name[64];
+    char oid_text[128];
     oid oid[MAX_OID_LEN];
     size_t oid_len;
 } metric_t;
 
 // devices 列表中的一项: { name, peer, community, metrics }
 typedef struct {
-    char name[COLLECTOR_NAME_LEN];
-    char peer[MAX_ADDR_LEN];
-    char community[MAX_COMMUNITY_LEN];
+    char name[64];
+    char peer[128];
+    char community[64];
     int metric_count;
-    metric_t metrics[MAX_METRICS_PER_DEVICE];
+    metric_t metrics[64];
 } device_t;
 
 // 对应配置文件 database = { host, user, password, name }
@@ -43,7 +37,7 @@ typedef struct {
 typedef struct {
     db_t db;
     int device_count;
-    device_t devices[MAX_DEVICES];
+    device_t devices[32];
 } collector_t;
 
 int load_collector_config(char *path, collector_t *config);
